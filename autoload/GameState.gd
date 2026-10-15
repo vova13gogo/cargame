@@ -94,6 +94,11 @@ var engine_repaired: bool = false
 # ---------------------------------------------------------------------------
 var inventory: Inventory = null      # set by the Player when it spawns
 
+## Shared deterministic RNG owned by GameState (seeded in _ready from
+## world_seed). Any system that wants reproducible randomness without
+## creating its own generator can use this one.
+var _shared_rng := RandomNumberGenerator.new()
+
 signal toast_requested(text: String)              # HUD shows these as popups
 signal resource_gathered(item_id: String, amount: int)  # QuestManager (Stage 8)
 
@@ -107,9 +112,10 @@ func notify_resource_gathered(item_id: String, amount: int) -> void:
 
 
 func _ready() -> void:
-	# Seed all global RNG consumers deterministically (no OS randomize(): the
-	# whole world must regenerate identically from GameState.world_seed).
-	random_set()
+	# Deterministic global seeding (no OS randomize()) so the whole world
+	# regenerates identically from GameState.world_seed. Godot 4 has no
+	# "random_set()" function; seed every shared RandomNumberGenerator we own.
+	_shared_rng.seed = world_seed
 
 
 ## Deterministic RNG helper so world generation is reproducible from the seed.
