@@ -88,6 +88,23 @@ const ZONES: Array[Dictionary] = [
 ## Story progress flag - Stage 9 weakens disasters once the Engine is repaired.
 var engine_repaired: bool = false
 
+# ---------------------------------------------------------------------------
+# Stage 2: player inventory (assigned by Player._ready), toast notifications
+# and resource-gathering hooks that later stages (quests) will subscribe to.
+# ---------------------------------------------------------------------------
+var inventory: Inventory = null      # set by the Player when it spawns
+
+signal toast_requested(text: String)              # HUD shows these as popups
+signal resource_gathered(item_id: String, amount: int)  # QuestManager (Stage 8)
+
+
+func toast(text: String) -> void:
+	toast_requested.emit(text)
+
+
+func notify_resource_gathered(item_id: String, amount: int) -> void:
+	resource_gathered.emit(item_id, amount)
+
 
 func _ready() -> void:
 	# Seed all global RNG consumers deterministically (no OS randomize(): the

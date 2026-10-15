@@ -1,0 +1,31 @@
+{
+	"_comment": "Item & tool database (Stage 2). Edit freely - loaded at runtime by ItemDB. 'type' is one of: resource | material | tool. Tools carry a mining 'tier'.",
+
+	"items": {
+		"wood":       {"name": "Wood",        "type": "resource", "color": "#8a5a30", "icon": "capsule", "max_stack": 999},
+		"stone":      {"name": "Stone",       "type": "resource", "color": "#9aa0a8", "icon": "box",     "max_stack": 999},
+		"copper":     {"name": "Copper Ore",  "type": "resource", "color": "#e07a3f", "icon": "sphere",  "max_stack": 999},
+		"iron":       {"name": "Iron Ore",    "type": "resource", "color": "#c8ccd4", "icon": "sphere",  "max_stack": 999},
+		"obsidian":   {"name": "Obsidian",    "type": "resource", "color": "#2b2135", "icon": "prism",   "max_stack": 999},
+		"sand":       {"name": "Sand",        "type": "resource", "color": "#f2d98c", "icon": "box",     "max_stack": 999},
+		"ice":        {"name": "Ice",         "type": "resource", "color": "#bfe6ff", "icon": "prism",   "max_stack": 999},
+		"fish":       {"name": "Fish",        "type": "resource", "color": "#5fc9e8", "icon": "capsule", "max_stack": 999},
+		"coal":       {"name": "Coal",        "type": "resource", "color": "#33363d", "icon": "box",     "max_stack": 999},
+		"rare_metal": {"name": "Rare Metal",  "type": "resource", "color": "#ffd24a", "icon": "sphere",  "max_stack": 999},
+
+		"gear":       {"name": "Engine Gear", "type": "material", "color": "#ffc93c", "icon": "cylinder", "max_stack": 99, "story": true},
+
+		"pickaxe_wood":     {"name": "Wooden Pickaxe",  "type": "tool", "tier": 1, "color": "#b07a45"},
+		"pickaxe_stone":    {"name": "Stone Pickaxe",   "type": "tool", "tier": 2, "color": "#9aa0a8"},
+		"pickaxe_iron":     {"name": "Iron Pickaxe",    "type": "tool", "tier": 3, "color": "#d7dbe2"},
+		"pickaxe_obsidian": {"name": "Obsidian Pickaxe","type": "tool", "tier": 4, "color": "#4a3a55"}
+	},
+
+	"tools": ["pickaxe_wood", "pickaxe_stone", "pickaxe_iron", "pickaxe_obsidian"],
+
+	"recipes": {
+		"pickaxe_stone":    {"cost": {"wood": 5,  "stone": 5},          "desc": "Mines iron ore (tier 2)"},
+		"pickaxe_iron":     {"cost": {"wood": 5,  "copper": 8},         "desc": "Mines obsidian (tier 3)"},
+		"pickaxe_obsidian": {"cost": {"wood": 5,  "iron": 8, "copper": 4}, "desc": "Mines rare metals (tier 4)"}
+	}
+}

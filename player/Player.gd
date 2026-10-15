@@ -20,9 +20,23 @@ extends CharacterBody3D
 @export var mouse_sensitivity: float = 0.0025
 @export var swim_bob: float = 0.4               # how deep we sit in water
 
-var health: float = 100.0                        # used by Stage 2+ systems
-var _cam_pivot_y: float = 1.6                    # camera target height on body
+var health: float = 100.0                        # Stage 8+ combat reads/writes this
+var max_health: float = 100.0
+var stamina: float = 100.0                       # drained by sprinting & swinging
+var max_stamina: float = 100.0
+@export var stamina_regen: float = 25.0          # per second while not acting
+@export var swing_stamina_cost: float = 6.0
+@export var harvest_range: float = 4.0           # how close we must stand to a node
+
+## Inventory lives on the player; HUD and crafting also access it via GameState.
+var inventory := Inventory.new()
+
+# Swing feedback state
+var _swing_time := 0.0                           # >0 while the wrench is mid-swing
+var _swing_cooldown := 0.0                       # seconds until next swing allowed
+var _wrench: Node3D = null                       # set after _build_avatar()
 var _grounded: bool = false                      # analytic terrain contact flag
+var _cam_pivot_y: float = 1.6                    # camera target height on body
 
 
 @onready var cam_pivot: Node3D = $CameraPivot
@@ -34,9 +48,17 @@ func _ready() -> void:
 	add_to_group("player")
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_build_avatar()
+	_wrench = body_visual.get_node_or_null("Wrench") as Node3D
+	GameState.inventory = inventory              # HUD / crafting access it globally
+	inventory.inventory_changed.connect(_on_inventory_changed)
 
 
-## Mouse look: yaw rotates the whole body, pitch rotates the camera pivot.
+func _on_inventory_changed() -> void:
+	# Hook for later stages (quest counters etc.). HUD listens on its own too.
+	pass
+
+
+## Mouse look + Stage 2 combat/hotbar input.
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
@@ -44,6 +66,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		cam_pivot.rotation.x = clampf(cam_pivot.rotation.x, -1.2, 0.7)
 	if event.is_action_pressed("toggle_camera"):
 		toggle_camera_view()
+	# Harvest / attack swing (LMB or F).
+	if event.is_action_pressed("harvest"):
+		_try_harvest()
+	# Hotbar number keys 1..9 select the first nine slots.
+	if event is InputEventKey and event.pressed and not event.echo:
+		var k := event.keycode
+		if k >= KEY_1 and k <= KEY_9:
+			inventory.selected_index = k - KEY_1
+		elif k == KEY_TAB:
+			# Tab toggles mouse capture so the inventory panel can be clicked.
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE \
+				if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
+				else Input.MOUSE_MODE_CAPTURED
 
 
 var _first_person := false
@@ -63,7 +98,14 @@ func _physics_process(delta: float) -> void:
 	var dir := (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
 
 	# --- horizontal movement --------------------------------------------------
-	var speed := sprint_speed if Input.is_action_pressed("sprint") else walk_speed
+	# Sprinting costs stamina; without stamina you just walk.
+	var want_sprint := Input.is_action_pressed("sprint") and stamina > 1.0 \
+		and input_dir.length_squared() > 0.01
+	var speed := sprint_speed if want_sprint else walk_speed
+	if want_sprint:
+		stamina = maxf(0.0, stamina - 18.0 * delta)
+	else:
+		stamina = minf(max_stamina, stamina + stamina_regen * delta)
 	var target := dir * speed
 	# Acceleration feel: quick start, quick stop (arcade).
 	velocity.x = lerp(velocity.x, target.x, 12.0 * delta)
@@ -98,6 +140,82 @@ func _physics_process(delta: float) -> void:
 		velocity.y = maxf(velocity.y, -1.5)     # buoyancy-ish float
 
 	_animate_walk(delta, input_dir.length())
+	_update_swing(delta)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: harvesting / melee swing
+# ---------------------------------------------------------------------------
+
+## Find the closest ResourceNode in front of us within harvest_range and hit it.
+func _try_harvest() -> void:
+	if _swing_cooldown > 0.0:
+		return
+	if stamina < swing_stamina_cost:
+		GameState.toast("Too tired! Wait for stamina.")
+		return
+	_swing_cooldown = 0.45
+	_swing_time = 0.3
+	stamina -= swing_stamina_cost
+
+	# Face slightly toward the target so the swing reads well.
+	var target := _find_node_in_range()
+	if target == null:
+		return  # whiff - swing animation still plays
+	rotate_toward_target(target.global_position, 0.25)
+
+	var tier := inventory.selected_tool_tier()
+	if not target.can_be_mined_with(tier):
+		var need := target.required_tier()
+		GameState.toast("Need a better tool (tier %d) to mine this!" % need)
+		return
+	var res := target.hit()
+	if res["got"] > 0:
+		var got: int = GameState.inventory.add_item(target.drop_item_id(), res["got"])
+		if got > 0:
+			GameState.toast("+%d %s" % [got, ItemDB.item_name(target.drop_item_id())])
+			GameState.notify_resource_gathered(target.drop_item_id(), got)
+		if got < res["got"]:
+			GameState.toast("Inventory full!")
+
+
+## Distance+direction filter over nodes in the "resource_node" group. Cheap
+## because only loaded chunks have nodes and there are at most ~60 per chunk.
+func _find_node_in_range() -> ResourceNode:
+	var best: ResourceNode = null
+	var best_d := harvest_range * harvest_range
+	var fwd := -global_transform.basis.z    # player faces -Z
+	for n in get_tree().get_nodes_in_group("resource_node"):
+		var node := n as ResourceNode
+		if node == null or node._dead:
+			continue
+		var to := node.global_position + Vector3(0, 1.0, 0) - global_position
+		var d2 := to.length_squared()
+		if d2 > best_d:
+			continue
+		# Require roughly facing the node (dot > 0.2), except when very close.
+		if d2 > 1.5 and to.normalized().dot(fwd) < 0.2:
+			continue
+		best = node
+		best_d = d2
+	return best
+
+
+func rotate_toward_target(pos: Vector3, speed: float) -> void:
+	var to := pos - global_position
+	if to.length_squared() < 0.01:
+		return
+	var want := atan2(to.x, to.z)
+	rotation.y = lerp_angle(rotation.y, want, speed)
+
+
+## Animate the wrench arm swing each frame.
+func _update_swing(delta: float) -> void:
+	_swing_cooldown = maxf(0.0, _swing_cooldown - delta)
+	if _swing_time > 0.0 and _wrench != null:
+		_swing_time -= delta
+		var f := 1.0 - clampf(_swing_time / 0.3, 0.0, 1.0)
+		_wrench.rotation_degrees.x = -120.0 * sin(f * PI)
 
 
 # ---------------------------------------------------------------------------
@@ -162,15 +280,29 @@ func _build_avatar() -> void:
 		arm.position = Vector3(0.42 * side, 0.25, 0)
 		body_visual.add_child(arm)
 
-	# Tiny wrench on the back - hints the player is a mechanic.
+	# Tiny wrench in the right hand - hints the player is a mechanic and doubles
+	# as the harvest/attack tool visual (swings on _update_swing).
+	var wrench_group := Node3D.new()
+	wrench_group.name = "Wrench"
+	wrench_group.position = Vector3(0.42, 0.1, -0.25)
+	body_visual.add_child(wrench_group)
+
 	var wrench_handle := BoxMesh.new()
 	wrench_handle.size = Vector3(0.07, 0.5, 0.07)
 	var wh := MeshInstance3D.new()
 	wh.mesh = wrench_handle
 	wh.material_override = FlatStyle.mat(Color(0.55, 0.58, 0.62))
-	wh.position = Vector3(0.2, 0.3, 0.3)
-	wh.rotation_degrees = Vector3(0, 0, 25)
-	body_visual.add_child(wh)
+	wh.position = Vector3(0, 0.15, 0)
+	wh.rotation_degrees = Vector3(-90, 0, 0)   # point forward like a held tool
+	wrench_group.add_child(wh)
+
+	var wrench_head := BoxMesh.new()
+	wrench_head.size = Vector3(0.22, 0.07, 0.1)
+	var whead := MeshInstance3D.new()
+	whead.mesh = wrench_head
+	whead.material_override = FlatStyle.mat(Color(0.70, 0.73, 0.78))
+	whead.position = Vector3(0, 0.15, -0.28)
+	wrench_group.add_child(whead)
 
 
 ## Simple procedural limb swing while moving (no animation files needed).

@@ -16,6 +16,7 @@ const RES := 20          # cells per side -> (RES+1)^2 vertices
 var cx: int = 0
 var cz: int = 0
 var size: float = 80.0
+@export var respawn_time: float = 90.0   ## seconds until a mined node regrows
 
 
 func setup(chunk_x: int, chunk_z: int, chunk_size: float) -> void:
@@ -112,111 +113,60 @@ func _color_for(wx: float, wz: float, h: float) -> Color:
 
 
 # ---------------------------------------------------------------------------
-# Props: trees & rocks as MultiMesh, deterministic per chunk+seed
+# Props: harvestable ResourceNodes (Stage 2). Trees/rocks used to be pure
+# MultiMesh decoration; now they are individual ResourceNode instances so the
+# player can chop/mine them. Budget is kept small (~45 per chunk) and nodes
+# live only while their chunk is loaded, which bounds physics bodies.
+# Zone-specific veins (copper/iron/obsidian/rare/sand/ice) spawn according to
+# data/nodes.json "zone_nodes" weights.
 # ---------------------------------------------------------------------------
 func _build_scatter() -> void:
 	var rng := GameState.make_rng(cx * 73856093 + cz * 19349663)
-	var step := 5.0                       # scatter grid spacing
-	var trunk_mesh := CapsuleMesh.new()
-	trunk_mesh.radius = 0.28
-	trunk_mesh.height = 2.2
-	var leaf_mesh := SphereMesh.new()     # rounded blob canopy
-	leaf_mesh.radius = 1.4
-	leaf_mesh.height = 2.6
-	var rock_mesh := SphereMesh.new()
-	rock_mesh.radius = 0.9
-	rock_mesh.height = 1.1
-
-	# Reset per-chunk buffers so state is clean even if reused.
-	_tree_xforms.clear(); _canopy_xforms.clear(); _rock_xforms.clear()
-	_trunk_colors = PackedColorArray(); _leaf_colors = PackedColorArray()
-	_rock_colors = PackedColorArray()
-
-	var tree_count := 0
-	var rock_count := 0
-	var max_props := 60                   # budget per chunk
+	var step := 6.0                       # scatter grid spacing
+	var max_props := 45                   # node budget per chunk
 
 	for iz in int(size / step):
 		for ix in int(size / step):
-			if tree_count + rock_count >= max_props:
+			if _nodes.size() >= max_props:
 				break
-			var wx := position.x + ix * step + rng.randf_range(-2.0, 2.0)
-			var wz := position.z + iz * step + rng.randf_range(-2.0, 2.0)
+			var wx := position.x + ix * step + rng.randf_range(-2.2, 2.2)
+			var wz := position.z + iz * step + rng.randf_range(-2.2, 2.2)
 			var h := Terrain.get_height(wx, wz)
 			if h < GameState.water_level + 0.8:
 				continue                    # no props in the sea
 			var slope := Terrain.get_normal(wx, wz).y
 			if slope < 0.72:
 				continue                    # too steep for anything
-			var roll := rng.randf()
-			var zone_id: String = GameState.get_zone_at(Vector3(wx, h, wz))["id"]
-			if roll < 0.55:
-				_add_tree(zone_id, Vector3(wx, h, wz), rng)
-				tree_count += 1
-			elif roll < 0.8:
-				_add_rock(Vector3(wx, h, wz), rng)
-				rock_count += 1
-
-	if tree_count > 0:
-		_flush_trees(trunk_mesh, leaf_mesh)
-	if rock_count > 0:
-		_flush_rocks(rock_mesh)
+			var zone: Dictionary = GameState.get_zone_at(Vector3(wx, h, wz))
+			var type_id := _pick_node_type(zone["id"], rng)
+			_spawn_node(type_id, Vector3(wx, h, wz), zone, rng)
 
 
-# Collected transforms are flushed into MultiMeshes at the end of build().
-var _tree_xforms: Array[Transform3D] = []
-var _canopy_xforms: Array[Transform3D] = []
-var _rock_xforms: Array[Transform3D] = []
-var _leaf_colors: PackedColorArray = PackedColorArray()
-var _trunk_colors: PackedColorArray = PackedColorArray()
-var _rock_colors: PackedColorArray = PackedColorArray()
+## Weighted pick between tree/rock and the zone's special nodes.
+func _pick_node_type(zone_id: String, rng: RandomNumberGenerator) -> String:
+	# Chance of a special zone node instead of plain tree/rock.
+	var specials: Array = ItemDB.zone_nodes.get(zone_id, [])
+	if not specials.is_empty() and rng.randf() < 0.30:
+		var total := 0
+		for entry in specials:
+			total += int(entry[1])
+		var roll := rng.randi_range(0, total - 1)
+		for entry in specials:
+			roll -= int(entry[1])
+			if roll < 0:
+				return String(entry[0])
+	return "tree" if rng.randf() < 0.6 else "rock"
 
 
-func _add_tree(zone_id: String, base: Vector3, rng: RandomNumberGenerator) -> void:
-	var zone: Dictionary = GameState.get_zone_by_id(zone_id)
-	var s := rng.randf_range(0.8, 1.6)
-	var rot_y := rng.randf_range(0.0, 360.0)
-	var trunk := Transform3D(Basis.from_euler(Vector3(0, deg_to_rad(rot_y), 0)) \
-		.scaled(Vector3(s, s, s)), base + Vector3(0, 1.1 * s, 0))
-	var canopy := Transform3D(Basis.from_euler(Vector3(0, deg_to_rad(rot_y), 0)) \
-		.scaled(Vector3(s, s, s)), base + Vector3(0, 2.9 * s, 0))
-	_tree_xforms.append(trunk)
-	_canopy_xforms.append(canopy)
-	# Per-instance color so one MultiMesh serves every zone's palette.
-	_trunk_colors.append(zone["trunk_color"])
-	_leaf_colors.append(zone["tree_color"])
+## Create one ResourceNode child; it is freed together with the chunk.
+func _spawn_node(type_id: String, pos: Vector3, zone: Dictionary,
+			rng: RandomNumberGenerator) -> void:
+	var node := ResourceNode.new()
+	node.respawn_time = respawn_time
+	add_child(node)
+	node.setup(type_id, pos, zone, rng)
+	node.add_to_group("resource_node")
+	_nodes.append(node)
 
 
-func _add_rock(base: Vector3, rng: RandomNumberGenerator) -> void:
-	var s := rng.randf_range(0.5, 1.4)
-	var b := Basis.from_euler(Vector3(rng.randf_range(-0.3, 0.3), rng.randf_range(0, TAU),
-		rng.randf_range(-0.3, 0.3))).scaled(Vector3(s, s * rng.randf_range(0.5, 0.9), s))
-	_rock_xforms.append(Transform3D(b, base + Vector3(0, s * 0.25, 0)))
-	_rock_colors.append(GameState.get_zone_at(base)["rock_color"])
-
-
-func _flush_trees(trunk_mesh: Mesh, leaf_mesh: Mesh) -> void:
-	add_child(_make_multimesh(trunk_mesh, _tree_xforms, _trunk_colors))
-	add_child(_make_multimesh(leaf_mesh, _canopy_xforms, _leaf_colors))
-
-
-func _flush_rocks(rock_mesh: Mesh) -> void:
-	add_child(_make_multimesh(rock_mesh, _rock_xforms, _rock_colors))
-
-
-static func _make_multimesh(mesh: Mesh, xforms: Array[Transform3D], colors: PackedColorArray) \
-		-> MultiMeshInstance3D:
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = mesh
-	mm.instance_count = xforms.size()
-	for i in xforms.size():
-		mm.set_instance_transform(i, xforms[i])
-		if i < colors.size():
-			mm.set_instance_color(i, colors[i])
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	# Unshaded material so instance colors pop like flat stickers.
-	mmi.material_override = FlatStyle.mat(Color.WHITE, true)
-	return mmi
+var _nodes: Array[ResourceNode] = []
