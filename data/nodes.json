@@ -1,0 +1,23 @@
+{
+	"_comment": "Node (harvestable prop) database (Stage 2). Each node type lists the resources it drops, hits needed per tier bracket and required tool tier. Chunk scatter uses these to turn decorative trees/rocks into minable ResourceNodes.",
+
+	"node_types": {
+		"tree":       {"drop": "wood",     "amount": 4, "hits": 3, "tier": 1, "color_key": "trunk_color"},
+		"rock":       {"drop": "stone",    "amount": 3, "hits": 3, "tier": 1, "color_key": "rock_color"},
+		"copper_vein":{"drop": "copper",   "amount": 3, "hits": 4, "tier": 2, "color_key": "accent_color"},
+		"iron_vein":  {"drop": "iron",     "amount": 3, "hits": 5, "tier": 2, "color_key": "rock_color"},
+		"obsidian_vein":{"drop": "obsidian","amount": 2, "hits": 6, "tier": 3, "color_key": "accent_color"},
+		"rare_vein":  {"drop": "rare_metal","amount": 1, "hits": 8, "tier": 4, "color_key": "accent_color"},
+		"sand_pile":  {"drop": "sand",     "amount": 3, "hits": 2, "tier": 1, "color_key": "ground_color"},
+		"ice_shard":  {"drop": "ice",      "amount": 3, "hits": 3, "tier": 1, "color_key": "accent_color"}
+	},
+
+	"zone_nodes": {
+		"_comment": "Which special nodes spawn in which zone (trees/rocks everywhere). Weights are relative.",
+		"plains":  [["rock", 30], ["copper_vein", 6]],
+		"desert":  [["sand_pile", 25], ["copper_vein", 20], ["rock", 10]],
+		"snow":    [["ice_shard", 20], ["iron_vein", 18], ["rock", 8]],
+		"volcano": [["obsidian_vein", 20], ["rare_vein", 6], ["rock", 10]],
+		"ocean":   [["rock", 12], ["iron_vein", 6]]
+	}
+}
